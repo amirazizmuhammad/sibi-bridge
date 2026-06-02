@@ -1,0 +1,11 @@
+# Lingkungan & cache Python (besar / bisa dibuat ulang)
+vision/.venv/
+**/__pycache__/
+*.pyc
+
+# Model MediaPipe (7.6 MB, unduh ulang via vision/_INFO.md)
+vision/hand_landmarker.task
+
+# (opsional) dataset & model hasil latih — hapus tanda # bila tak mau di-commit
+# vision/dataset.csv
+# vision/model_sibi.joblib

@@ -1,0 +1,219 @@
+{
+  "name": "SIBI-Bridge — Isyarat ke Teks/Suara",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "huruf",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "11111111-1111-4111-8111-111111111111",
+      "name": "Webhook Huruf",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "sibi-huruf"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Periksa token keamanan sebelum memproses.\n// UBAH nilai SIBI_SECRET di bawah — harus sama dengan SIBI_TOKEN di sibi_common.py & firmware.\n// Selama masih 'GANTI_TOKEN_RAHASIA', pemeriksaan DILEWATI (mode dev / tidak aktif).\nconst SIBI_SECRET = 'GANTI_TOKEN_RAHASIA';\nconst _reqHdr = ($input.first().json.headers || {});\nconst _token = (_reqHdr['x-sibi-token'] || '');\nif (SIBI_SECRET !== 'GANTI_TOKEN_RAHASIA' && _token !== SIBI_SECRET) {\n  return [{ json: { aksi: 'ERROR', perluProses: false, buffer: '', hasil: null, claudeBody: {} } }];\n}\n\n// ALUR 1 — Terima huruf dari ESP32/simulator dan rangkai jadi buffer kalimat.\n// State disimpan di workflowStaticData (TANPA database eksternal).\nconst s = $getWorkflowStaticData('global');\ns.buffer = s.buffer || \"\";\ns.hasil = (typeof s.hasil === 'undefined') ? null : s.hasil;\n\nconst item = $input.first().json;\nconst body = item.body || item; // webhook v2 menaruh data POST di .body\nconst aksi = String(body.aksi || \"\").toUpperCase();\nconst huruf = String(body.huruf || \"\");\n\nif (aksi === \"HURUF\") { s.buffer += huruf; }\nelse if (aksi === \"SPASI\") { s.buffer += \" \"; }\nelse if (aksi === \"HAPUS\") { s.buffer = s.buffer.slice(0, -1); }\n// aksi \"KIRIM\" diproses Claude HANYA bila buffer tidak kosong (hemat biaya + aman)\nconst perluProses = (aksi === \"KIRIM\") && (s.buffer.trim().length > 0);\n\n// Bangun body permintaan Claude di sini agar node HTTP tidak perlu escaping rumit.\n// Format OpenAI-compatible (sumopod AI = proxy LiteLLM di https://ai.sumopod.com/v1).\n// Instruksi ditaruh di pesan USER (model sumopod abaikan role 'system'-nya sendiri).\nconst instruksi = 'Kamu mesin koreksi abjad jari SIBI. Diberi rangkaian huruf kapital (mungkin salah eja/terpotong), tebak kata/kalimat Bahasa Indonesia sehari-hari yang paling masuk akal. Perbaiki ejaan, spasi, kapitalisasi, tanda baca. JANGAN bertanya, JANGAN menjelaskan, JANGAN menambah info. Keluarkan HANYA satu baris JSON valid: {\"teks\":\"<kalimat rapi>\",\"untuk_suara\":\"<kalimat tanpa tanda baca berlebih>\"}';\nconst MODEL_AI = \"claude-haiku-4-5\"; // UBAH bila nama model di sumopod beda (cek: GET https://ai.sumopod.com/v1/models)\nconst claudeBody = {\n  model: MODEL_AI,\n  max_tokens: 200,\n  temperature: 0.2,\n  response_format: { type: \"json_object\" },\n  messages: [\n    { role: \"user\", content: instruksi + \" Huruf: \" + s.buffer }\n  ]\n};\n\nreturn [{ json: { aksi: aksi, perluProses: perluProses, buffer: s.buffer, hasil: s.hasil, claudeBody: claudeBody } }];"
+      },
+      "id": "22222222-2222-4222-8222-222222222222",
+      "name": "Proses Huruf",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-perlu-proses",
+              "leftValue": "={{ $json.perluProses }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "33333333-3333-4333-8333-333333333333",
+      "name": "Perlu Panggil Claude?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://ai.sumopod.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer MASUKKAN_API_KEY" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.claudeBody }}",
+        "options": {}
+      },
+      "id": "44444444-4444-4444-8444-444444444444",
+      "name": "Panggil Claude",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse balasan Claude, simpan ke staticData, kosongkan buffer.\n// Mode aman/offline: bila Claude gagal atau format JSON tidak sesuai, pakai buffer apa adanya.\nconst s = $getWorkflowStaticData('global');\nconst teksDikirim = s.buffer || \"\";\nlet hasil;\ntry {\n  let raw = $input.first().json.choices[0].message.content || \"\";\n  const a = raw.indexOf(\"{\"); const b = raw.lastIndexOf(\"}\"); // buang pagar ```json``` / teks pembungkus\n  if (a === -1 || b === -1) { throw new Error(\"tidak ada JSON di balasan\"); }\n  raw = raw.slice(a, b + 1);\n  hasil = JSON.parse(raw);\n  if (!hasil || !hasil.teks) { throw new Error(\"format hasil tidak sesuai\"); }\n  if (!hasil.untuk_suara) { hasil.untuk_suara = hasil.teks; }\n} catch (e) {\n  hasil = { teks: teksDikirim, untuk_suara: teksDikirim };\n}\ns.hasil = hasil;\ns.buffer = \"\"; // privasi: kosongkan buffer setiap kalimat selesai\nreturn [{ json: { ok: true, buffer: \"\", hasil: s.hasil, ts: Date.now() } }];"
+      },
+      "id": "55555555-5555-4555-8555-555555555555",
+      "name": "Simpan Hasil",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": true, \"buffer\": \"\", \"hasil\": $json.hasil, \"ts\": $json.ts } }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              { "name": "Access-Control-Allow-Origin", "value": "*" }
+            ]
+          }
+        }
+      },
+      "id": "66666666-6666-4666-8666-666666666666",
+      "name": "Balas KIRIM",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1340, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": true, \"buffer\": $json.buffer, \"hasil\": $json.hasil } }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              { "name": "Access-Control-Allow-Origin", "value": "*" }
+            ]
+          }
+        }
+      },
+      "id": "77777777-7777-4777-8777-777777777777",
+      "name": "Balas Huruf",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 420]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "status",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "88888888-8888-4888-8888-888888888888",
+      "name": "Webhook Status",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 600],
+      "webhookId": "sibi-status"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ALUR 2 — Status untuk dashboard (polling tiap 1 detik).\nconst s = $getWorkflowStaticData('global');\nreturn [{ json: { buffer: s.buffer || \"\", hasil: (typeof s.hasil === 'undefined' ? null : s.hasil), ts: Date.now() } }];"
+      },
+      "id": "99999999-9999-4999-8999-999999999999",
+      "name": "Baca Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 600]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"buffer\": $json.buffer, \"hasil\": $json.hasil, \"ts\": $json.ts } }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              { "name": "Access-Control-Allow-Origin", "value": "*" }
+            ]
+          }
+        }
+      },
+      "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "name": "Balas Status",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [680, 600]
+    }
+  ],
+  "connections": {
+    "Webhook Huruf": {
+      "main": [
+        [ { "node": "Proses Huruf", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Proses Huruf": {
+      "main": [
+        [ { "node": "Perlu Panggil Claude?", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Perlu Panggil Claude?": {
+      "main": [
+        [ { "node": "Panggil Claude", "type": "main", "index": 0 } ],
+        [ { "node": "Balas Huruf", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Panggil Claude": {
+      "main": [
+        [ { "node": "Simpan Hasil", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Simpan Hasil": {
+      "main": [
+        [ { "node": "Balas KIRIM", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Webhook Status": {
+      "main": [
+        [ { "node": "Baca Status", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Baca Status": {
+      "main": [
+        [ { "node": "Balas Status", "type": "main", "index": 0 } ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateId": "sibi-bridge-isyarat"
+  }
+}

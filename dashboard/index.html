@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<!--
+  SIBI-Bridge — Dashboard Kios (Tugas S3)
+  ---------------------------------------
+  Satu file HTML (HTML+CSS+JS), TANPA library eksternal. Buka di Chrome (tablet/HP/PC).
+
+  Fungsi:
+   1) Subtitle besar: polling GET ke n8n /webhook/status tiap 1 detik.
+      - "buffer" (sedang mengeja) tampil sedang di atas.
+      - "hasil.teks" (kalimat final Claude) tampil SANGAT BESAR di tengah (untuk tuna rungu).
+   2) Suara otomatis (untuk tuna netra & umum): kalimat baru dibacakan via Web Speech API (id-ID).
+      Tidak membacakan teks yang sama dua kali.
+   3) Tombol "Dengar Ucapan" (untuk tuna rungu): ucapan lawan bicara -> teks (SpeechRecognition id-ID).
+   4) Kontrol: Mute/Unmute, kecepatan bicara, indikator koneksi.
+
+  CATATAN TEKNIS:
+   - N8N_STATUS_URL di bawah sudah diisi ke n8n VPS sumopod (UBAH bila pindah server).
+   - Web Speech API STT (Dengar) HANYA jalan di Chrome via HTTPS atau localhost (butuh izin mikrofon).
+   - TANPA localStorage/sessionStorage. Teks & komentar Bahasa Indonesia.
+-->
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SIBI-Bridge — Subtitle &amp; Suara</title>
+<style>
+  :root {
+    --bg: #000000;
+    --panel: #101418;
+    --garis: #2a3138;
+    --teks: #ffffff;
+    --redup: #9fb3c8;
+    --kuning: #ffd54a;
+    --hijau: #38d16a;
+    --merah: #ff5a52;
+    --biru: #3b9dff;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--teks);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; min-height: 100vh;
+  }
+
+  /* ===== Header ===== */
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 22px; border-bottom: 1px solid var(--garis);
+  }
+  .judul { font-size: clamp(18px, 2.4vw, 26px); font-weight: 800; letter-spacing: .5px; }
+  .judul .b { color: var(--biru); }
+  .koneksi { display: flex; align-items: center; gap: 9px; font-size: 14px; color: var(--redup); }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--merah); }
+  .dot.on { background: var(--hijau); }
+
+  /* ===== Area utama subtitle ===== */
+  main {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 24px clamp(16px, 4vw, 60px); gap: 18px; text-align: center;
+  }
+  .mengeja-label { font-size: 14px; color: var(--redup); text-transform: uppercase; letter-spacing: 2px; }
+  .buffer {
+    font-family: ui-monospace, "Cascadia Code", monospace;
+    font-size: clamp(22px, 4vw, 44px); color: var(--kuning);
+    letter-spacing: 4px; min-height: 1.2em; word-break: break-word;
+  }
+  .buffer .caret { animation: kedip 1s step-end infinite; color: var(--redup); }
+  @keyframes kedip { 50% { opacity: 0; } }
+
+  .hasil {
+    font-size: clamp(40px, 9vw, 128px); font-weight: 800; line-height: 1.08;
+    max-width: 16ch; word-break: break-word;
+  }
+  .hasil.menunggu { color: var(--redup); font-weight: 600; font-size: clamp(26px, 4vw, 52px); }
+
+  /* ===== Panel lawan bicara (STT) ===== */
+  .lawan {
+    width: 100%; max-width: 1100px; margin-top: 10px;
+    border: 2px solid var(--biru); border-radius: 14px; padding: 16px 20px;
+    background: rgba(59,157,255,.07); display: none;
+  }
+  .lawan.aktif { display: block; }
+  .lawan .label { font-size: 14px; color: var(--biru); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px; }
+  .lawan .teks { font-size: clamp(24px, 4.5vw, 56px); font-weight: 700; min-height: 1.1em; }
+  .lawan .interim { color: var(--redup); }
+
+  /* ===== Kontrol bawah ===== */
+  footer {
+    border-top: 1px solid var(--garis); padding: 12px 18px;
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: center;
+  }
+  .kontrol { display: flex; align-items: center; gap: 9px; }
+  button {
+    cursor: pointer; border: 1px solid var(--garis); border-radius: 10px;
+    background: var(--panel); color: var(--teks);
+    font-size: 16px; font-weight: 600; padding: 12px 18px; min-height: 48px;
+  }
+  button:hover { filter: brightness(1.3); }
+  button:active { transform: scale(.97); }
+  .dengar.rec { background: var(--merah); border-color: var(--merah); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { filter: brightness(1.4); } }
+  label.kecil { font-size: 13px; color: var(--redup); }
+  input[type=range] { width: 130px; accent-color: var(--biru); }
+  input[type=text] {
+    padding: 9px 10px; border-radius: 8px; border: 1px solid var(--garis);
+    background: var(--panel); color: var(--teks); font-size: 13px;
+    font-family: ui-monospace, monospace; width: min(60vw, 360px);
+  }
+  .gear { font-size: 20px; padding: 10px 14px; }
+  #pengaturan { display: none; width: 100%; justify-content: center; padding-top: 8px; }
+  #pengaturan.buka { display: flex; }
+  .pesan-error { color: var(--merah); font-size: 13px; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="judul">🌉 SIBI-<span class="b">Bridge</span></div>
+    <div class="koneksi" aria-live="polite">
+      <span id="dot" class="dot"></span>
+      <span id="koneksiTeks">Menyambung…</span>
+    </div>
+  </header>
+
+  <main>
+    <div class="mengeja-label">Sedang mengeja</div>
+    <div id="buffer" class="buffer"><span class="caret">▌</span></div>
+
+    <div id="hasil" class="hasil menunggu" aria-live="polite">Menunggu kalimat…</div>
+
+    <!-- Panel ucapan lawan bicara (muncul saat tombol Dengar dipakai) -->
+    <div id="lawan" class="lawan">
+      <div class="label">🗣️ Lawan bicara</div>
+      <div class="teks"><span id="lawanFinal"></span><span id="lawanInterim" class="interim"></span></div>
+    </div>
+  </main>
+
+  <footer>
+    <button id="btnReset" onclick="resetTampilan()" title="Bersihkan tampilan kalimat">🗑️ Reset</button>
+    <button id="btnMute" class="kontrol" onclick="toggleMute()">🔊 Suara: ON</button>
+
+    <div class="kontrol">
+      <label class="kecil" for="rate">Kecepatan</label>
+      <input id="rate" type="range" min="0.6" max="1.6" step="0.1" value="1" />
+    </div>
+
+    <button id="btnDengar" class="dengar" onclick="toggleDengar()">🎤 Dengar Ucapan</button>
+
+    <button class="gear" onclick="togglePengaturan()" title="Pengaturan URL">⚙️</button>
+
+    <div id="pengaturan">
+      <div class="kontrol">
+        <label class="kecil" for="urlStatus">URL status n8n:</label>
+        <input id="urlStatus" type="text" spellcheck="false" />
+        <button onclick="terapkanUrl()">Terapkan</button>
+      </div>
+    </div>
+  </footer>
+
+<script>
+  // ===================================================================
+  //  URL status n8n (sudah diisi ke VPS sumopod). UBAH bila pindah server.
+  // ===================================================================
+  let N8N_STATUS_URL = "https://n8n-kks2xqcv5bbm.jkt5.sumopod.my.id/webhook/status";
+
+  // ===== State =====
+  let muted = false;
+  let teksTerakhirDibacakan = null; // agar tidak membacakan kalimat sama dua kali
+  let terhubung = false;
+
+  // ===== Elemen =====
+  const elBuffer = document.getElementById("buffer");
+  const elHasil = document.getElementById("hasil");
+  const elDot = document.getElementById("dot");
+  const elKoneksi = document.getElementById("koneksiTeks");
+  const elRate = document.getElementById("rate");
+  const elUrl = document.getElementById("urlStatus");
+  elUrl.value = N8N_STATUS_URL;
+
+  // ===== Indikator koneksi =====
+  function setKoneksi(ok, pesan) {
+    terhubung = ok;
+    elDot.classList.toggle("on", ok);
+    elKoneksi.textContent = pesan || (ok ? "Terhubung" : "Menyambung ulang…");
+  }
+
+  // ===== Tampilkan buffer (sedang mengeja) =====
+  function tampilkanBuffer(buffer) {
+    if (buffer && buffer.length) {
+      elBuffer.textContent = buffer;
+      const caret = document.createElement("span");
+      caret.className = "caret"; caret.textContent = "▌";
+      elBuffer.appendChild(caret);
+    } else {
+      elBuffer.innerHTML = '<span class="caret">▌</span>';
+    }
+  }
+
+  // ===== Tampilkan hasil (kalimat final) =====
+  function tampilkanHasil(hasil) {
+    if (hasil && hasil.teks) {
+      elHasil.textContent = hasil.teks;
+      elHasil.classList.remove("menunggu");
+    } else {
+      elHasil.textContent = "Menunggu kalimat…";
+      elHasil.classList.add("menunggu");
+    }
+  }
+
+  // ===== Text-to-Speech (id-ID) =====
+  function bacakan(teks) {
+    if (!("speechSynthesis" in window)) return;
+    if (muted || !teks) return;
+    window.speechSynthesis.cancel(); // hentikan ucapan sebelumnya
+    const u = new SpeechSynthesisUtterance(teks);
+    u.lang = "id-ID";
+    u.rate = parseFloat(elRate.value) || 1;
+    const voiceId = pilihSuaraId();
+    if (voiceId) u.voice = voiceId;
+    window.speechSynthesis.speak(u);
+  }
+  function pilihSuaraId() {
+    const voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+    return voices.find(v => v.lang === "id-ID") || voices.find(v => v.lang && v.lang.startsWith("id")) || null;
+  }
+  // getVoices() kadang kosong sampai event ini ter-fire (Chrome)
+  if ("speechSynthesis" in window) {
+    window.speechSynthesis.onvoiceschanged = pilihSuaraId;
+  }
+
+  // ===== Mute / Unmute =====
+  function toggleMute() {
+    muted = !muted;
+    document.getElementById("btnMute").textContent = muted ? "🔇 Suara: OFF" : "🔊 Suara: ON";
+    if (muted && "speechSynthesis" in window) window.speechSynthesis.cancel();
+  }
+
+  // ===== Polling status dengan exponential backoff =====
+  // Sukses → interval kembali ke 1 dtk. Gagal → lipat dua, maks 30 dtk.
+  let _pollingDelay = 1000;
+  let _pollingTimer = null;
+
+  function jadwalkanPoll() {
+    if (_pollingTimer) clearTimeout(_pollingTimer);
+    _pollingTimer = setTimeout(async () => {
+      await ambilStatus();
+      jadwalkanPoll();
+    }, _pollingDelay);
+  }
+
+  async function ambilStatus() {
+    try {
+      const resp = await fetch(N8N_STATUS_URL, { cache: "no-store" });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      const data = await resp.json();
+      _pollingDelay = 1000; // reset ke normal saat sukses
+      setKoneksi(true, "Terhubung");
+
+      tampilkanBuffer(data.buffer);
+      tampilkanHasil(data.hasil);
+
+      // Bacakan kalimat baru (sekali saja)
+      if (data.hasil && data.hasil.untuk_suara && data.hasil.untuk_suara !== teksTerakhirDibacakan) {
+        teksTerakhirDibacakan = data.hasil.untuk_suara; // tandai walau muted (agar tak meledak saat unmute)
+        bacakan(data.hasil.untuk_suara);
+      }
+    } catch (e) {
+      // Backoff eksponensial: 1s → 2s → 4s → ... → maks 30s
+      _pollingDelay = Math.min(_pollingDelay * 2, 30000);
+      setKoneksi(false, "Menyambung ulang…");
+    }
+  }
+  jadwalkanPoll();
+  ambilStatus();
+
+  // ===== Speech-to-Text: "Dengar Ucapan" (untuk tuna rungu) =====
+  // Hanya jalan di Chrome (HTTPS/localhost) + izin mikrofon.
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognizer = null;
+  let mendengar = false;
+  const elLawan = document.getElementById("lawan");
+  const elLawanFinal = document.getElementById("lawanFinal");
+  const elLawanInterim = document.getElementById("lawanInterim");
+
+  function toggleDengar() {
+    const btn = document.getElementById("btnDengar");
+    if (!Recognition) {
+      alert("Fitur Dengar (Speech-to-Text) butuh Google Chrome via HTTPS atau localhost.");
+      return;
+    }
+    if (mendengar) { recognizer.stop(); return; }
+
+    recognizer = new Recognition();
+    recognizer.lang = "id-ID";
+    recognizer.continuous = true;
+    recognizer.interimResults = true;
+
+    recognizer.onstart = () => {
+      mendengar = true;
+      btn.textContent = "⏹️ Berhenti Dengar";
+      btn.classList.add("rec");
+      elLawan.classList.add("aktif");
+      elLawanFinal.textContent = "";
+      elLawanInterim.textContent = "…";
+    };
+    recognizer.onresult = (ev) => {
+      let final = "", interim = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const t = ev.results[i][0].transcript;
+        if (ev.results[i].isFinal) final += t; else interim += t;
+      }
+      if (final) elLawanFinal.textContent += final + " ";
+      elLawanInterim.textContent = interim;
+    };
+    recognizer.onerror = (ev) => {
+      elLawanInterim.textContent = " [error: " + ev.error + "]";
+    };
+    recognizer.onend = () => {
+      mendengar = false;
+      btn.textContent = "🎤 Dengar Ucapan";
+      btn.classList.remove("rec");
+      elLawanInterim.textContent = "";
+    };
+    recognizer.start();
+  }
+
+  // ===== Reset tampilan (untuk operator kios) =====
+  function resetTampilan() {
+    teksTerakhirDibacakan = null;
+    tampilkanBuffer("");
+    tampilkanHasil(null);
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  }
+
+  // ===== Pengaturan URL (runtime, tanpa localStorage) =====
+  function togglePengaturan() { document.getElementById("pengaturan").classList.toggle("buka"); }
+  function terapkanUrl() {
+    const v = elUrl.value.trim();
+    if (v) { N8N_STATUS_URL = v; setKoneksi(false, "Menyambung…"); ambilStatus(); }
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<!--
+  SIBI-Bridge — Panel Simulator Sarung Tangan (Tugas S2)
+  ------------------------------------------------------
+  Mensimulasikan ESP32: kirim huruf/aksi ke webhook n8n TANPA hardware.
+  Pakai untuk menguji n8n + Claude + dashboard sebelum sarung tangan siap.
+
+  Cara pakai:
+   1. Pastikan workflow n8n sudah Active (lihat n8n/_INFO.md).
+   2. Buka file ini di browser (Chrome).
+   3. Isi URL n8n di kolom atas (default http://localhost:5678), lalu klik huruf.
+   4. Susun kata -> klik KIRIM -> lihat balasan JSON (hasil dari Claude).
+
+  Catatan: TANPA library eksternal, TANPA localStorage/sessionStorage.
+  Teks & komentar dalam Bahasa Indonesia.
+-->
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SIBI-Bridge — Simulator Sarung Tangan</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c2330;
+    --teks: #e6edf3;
+    --redup: #8b949e;
+    --garis: #30363d;
+    --biru: #2f81f7;
+    --hijau: #2ea043;
+    --kuning: #d29922;
+    --merah: #da3633;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px;
+    background: var(--bg); color: var(--teks);
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--redup); font-size: 13px; margin-bottom: 16px; }
+  .kartu {
+    background: var(--panel); border: 1px solid var(--garis);
+    border-radius: 10px; padding: 14px; margin-bottom: 14px;
+  }
+  label { display: block; font-size: 12px; color: var(--redup); margin-bottom: 4px; }
+  input[type=text] {
+    width: 100%; padding: 9px 10px; border-radius: 8px;
+    border: 1px solid var(--garis); background: var(--panel-2);
+    color: var(--teks); font-size: 14px; font-family: ui-monospace, monospace;
+  }
+  .baris { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .buffer-box {
+    font-family: ui-monospace, monospace; font-size: 22px;
+    background: var(--panel-2); border: 1px solid var(--garis);
+    border-radius: 8px; padding: 12px 14px; min-height: 26px;
+    letter-spacing: 2px; word-break: break-all;
+  }
+  .buffer-box .kosong { color: var(--redup); letter-spacing: normal; font-size: 14px; }
+  .grid-huruf {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
+    gap: 8px; margin-top: 6px;
+  }
+  button {
+    cursor: pointer; border: 1px solid var(--garis); border-radius: 8px;
+    background: var(--panel-2); color: var(--teks);
+    font-size: 17px; font-weight: 600; padding: 12px 0;
+    transition: transform .04s ease, filter .12s ease;
+  }
+  button:hover { filter: brightness(1.2); }
+  button:active { transform: scale(0.95); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .aksi { font-size: 15px; padding: 13px 18px; flex: 1; min-width: 110px; }
+  .spasi { background: var(--biru); border-color: var(--biru); }
+  .hapus { background: var(--kuning); border-color: var(--kuning); color: #1a1a1a; }
+  .kirim { background: var(--hijau); border-color: var(--hijau); }
+  .status-btn { background: var(--panel-2); }
+  .log {
+    font-family: ui-monospace, monospace; font-size: 12.5px;
+    background: #0b0f14; border: 1px solid var(--garis); border-radius: 8px;
+    padding: 10px; height: 240px; overflow-y: auto; white-space: pre-wrap;
+    line-height: 1.5;
+  }
+  .log .ok { color: var(--hijau); }
+  .log .err { color: var(--merah); }
+  .log .info { color: var(--biru); }
+  .log .redup { color: var(--redup); }
+  .mini { font-size: 12px; color: var(--redup); }
+  .hapus-log { background: transparent; border: none; color: var(--redup); font-size: 12px; padding: 4px; }
+</style>
+</head>
+<body>
+  <h1>🧪 Simulator Sarung Tangan — SIBI-Bridge</h1>
+  <div class="sub">Mensimulasikan ESP32. Kirim huruf/aksi ke n8n untuk menguji pipeline tanpa hardware.</div>
+
+  <!-- ===== KONFIGURASI URL (UBAH DI SINI) ===== -->
+  <div class="kartu">
+    <label for="urlBase">URL dasar n8n (tanpa /webhook). Contoh: http://localhost:5678 atau https://abc123.ngrok-free.app</label>
+    <input id="urlBase" type="text" value="https://n8n-kks2xqcv5bbm.jkt5.sumopod.my.id" spellcheck="false" />
+    <div class="mini" style="margin-top:6px">
+      Akan mengirim ke <code>&lt;URL&gt;/webhook/huruf</code> dan membaca <code>&lt;URL&gt;/webhook/status</code>.
+    </div>
+  </div>
+
+  <!-- ===== BUFFER SAAT INI ===== -->
+  <div class="kartu">
+    <label>Buffer kalimat saat ini (dari balasan server)</label>
+    <div id="buffer" class="buffer-box"><span class="kosong">(kosong — klik huruf untuk mulai)</span></div>
+  </div>
+
+  <!-- ===== TOMBOL AKSI ===== -->
+  <div class="kartu">
+    <div class="baris">
+      <button class="aksi spasi" onclick="kirimAksi('SPASI')">␣ SPASI</button>
+      <button class="aksi hapus" onclick="kirimAksi('HAPUS')">⌫ HAPUS</button>
+      <button class="aksi kirim" onclick="kirimAksi('KIRIM')">✔ KIRIM (panggil Claude)</button>
+      <button class="aksi status-btn" onclick="bacaStatus()">🔄 Cek Status</button>
+    </div>
+  </div>
+
+  <!-- ===== TOMBOL HURUF A-Z ===== -->
+  <div class="kartu">
+    <label>Huruf (kirim sebagai aksi "HURUF")</label>
+    <div id="gridHuruf" class="grid-huruf"></div>
+  </div>
+
+  <!-- ===== LOG ===== -->
+  <div class="kartu">
+    <div class="baris" style="justify-content: space-between; margin-bottom: 8px;">
+      <label style="margin:0">Log permintaan &amp; balasan JSON</label>
+      <button class="hapus-log" onclick="hapusLog()">bersihkan log</button>
+    </div>
+    <div id="log" class="log"><span class="redup">Belum ada permintaan.</span></div>
+  </div>
+
+<script>
+  // ====== KONSTANTA ======
+  const DEVICE = "glove-01"; // sama seperti firmware
+
+  // Ambil URL dasar dari kolom input (bisa diubah pengguna tanpa edit kode)
+  function urlHuruf()  { return ambilBase() + "/webhook/huruf"; }
+  function urlStatus() { return ambilBase() + "/webhook/status"; }
+  function ambilBase() {
+    return document.getElementById("urlBase").value.trim().replace(/\/+$/, "");
+  }
+
+  // ====== LOG ke layar ======
+  const elLog = document.getElementById("log");
+  let logKosong = true;
+  function tulisLog(teks, kelas) {
+    if (logKosong) { elLog.innerHTML = ""; logKosong = false; }
+    const waktu = new Date().toLocaleTimeString("id-ID");
+    const baris = document.createElement("div");
+    baris.innerHTML = '<span class="redup">[' + waktu + ']</span> <span class="' + (kelas||"") + '">' + teks + '</span>';
+    elLog.appendChild(baris);
+    elLog.scrollTop = elLog.scrollHeight;
+  }
+  function hapusLog() { elLog.innerHTML = '<span class="redup">Log dibersihkan.</span>'; logKosong = true; }
+
+  // ====== Tampilkan buffer ======
+  function tampilkanBuffer(buffer) {
+    const el = document.getElementById("buffer");
+    if (buffer && buffer.length) {
+      el.textContent = buffer;
+    } else {
+      el.innerHTML = '<span class="kosong">(kosong)</span>';
+    }
+  }
+
+  // ====== Kirim 1 huruf ======
+  async function kirimHuruf(huruf) {
+    await kirim({ device: DEVICE, aksi: "HURUF", huruf: huruf });
+  }
+  // ====== Kirim aksi tombol ======
+  async function kirimAksi(aksi) {
+    await kirim({ device: DEVICE, aksi: aksi });
+  }
+
+  // ====== POST ke /webhook/huruf ======
+  async function kirim(payload) {
+    const ringkas = payload.aksi === "HURUF" ? ("HURUF '" + payload.huruf + "'") : payload.aksi;
+    tulisLog("→ POST " + ringkas, "info");
+    try {
+      const resp = await fetch(urlHuruf(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const teks = await resp.text();
+      let data = null;
+      try { data = JSON.parse(teks); } catch (e) { /* biarkan mentah */ }
+      if (!resp.ok) {
+        tulisLog("← HTTP " + resp.status + ": " + teks, "err");
+        return;
+      }
+      tulisLog("← " + teks, "ok");
+      if (data) {
+        if (typeof data.buffer === "string") tampilkanBuffer(data.buffer);
+        if (data.hasil && data.hasil.teks) {
+          tulisLog("   Hasil Claude: \"" + data.hasil.teks + "\"  (untuk_suara: \"" + data.hasil.untuk_suara + "\")", "ok");
+        }
+      }
+    } catch (e) {
+      tulisLog("← GAGAL fetch: " + e.message + " — cek URL, n8n Active, & CORS.", "err");
+    }
+  }
+
+  // ====== GET /webhook/status ======
+  async function bacaStatus() {
+    tulisLog("→ GET /webhook/status", "info");
+    try {
+      const resp = await fetch(urlStatus());
+      const teks = await resp.text();
+      let data = null;
+      try { data = JSON.parse(teks); } catch (e) {}
+      if (!resp.ok) { tulisLog("← HTTP " + resp.status + ": " + teks, "err"); return; }
+      tulisLog("← " + teks, "ok");
+      if (data && typeof data.buffer === "string") tampilkanBuffer(data.buffer);
+    } catch (e) {
+      tulisLog("← GAGAL fetch: " + e.message, "err");
+    }
+  }
+
+  // ====== Bangun tombol A-Z ======
+  (function buatTombolHuruf() {
+    const grid = document.getElementById("gridHuruf");
+    for (let i = 65; i <= 90; i++) {
+      const huruf = String.fromCharCode(i);
+      const b = document.createElement("button");
+      b.textContent = huruf;
+      b.onclick = () => kirimHuruf(huruf);
+      grid.appendChild(b);
+    }
+  })();
+</script>
+</body>
+</html>
