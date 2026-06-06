@@ -101,6 +101,15 @@
 ## 📓 Log Sesi (Session Log)
 > Tambahkan entri baru di ATAS tiap sesi.
 
+### 2026-06-06 — Upload ke GitHub + proposal hibah .docx
+- **Repo GitHub dibuat & di-push:** https://github.com/amirazizmuhammad/sibi-bridge (Public, 30 file, branch `main`). Semua kode + dokumentasi tersedia open-source.
+- **Keamanan pra-push diverifikasi:** tidak ada API key asli dalam kode — hanya placeholder `MASUKKAN_API_KEY` / `GANTI_TOKEN_RAHASIA`. Aman dipublikasi.
+- **Proposal hibah `.docx` dibuat:** `Proposal-Hibah-SIBI-Bridge.docx` (18.5 KB) — dokumen Word profesional 17 bagian, cover page, tabel RAB, metodologi Fase 0–2. (Tidak di-commit ke repo; file lokal di folder proyek.)
+- **File temp dibersihkan:** `gh-auth.js`, `gh-poll.js`, `gh-create-push.js`, `gh-check.js`, `gh-auth.ps1`, `gh-auth2.ps1`, folder `docx-gen/` dihapus.
+- **PAT GitHub:** `sibi-bridge-push2` (scope `repo`, exp. 6 Jul 2026) dipakai untuk push → masih aktif di settings. Token lama `sibi-bridge-push` dihapus.
+- File diubah: `PROGRESS.md`.
+- **Langkah berikutnya:** 👷 rotate API key sumopod + n8n → isi `SIBI_TOKEN` & `SIBI_SECRET` → reimport workflow n8n → 👷 uji V5 webcam.
+
 ### 2026-06-02 — Perbaikan semua isu medium & high dari audit mendalam
 - **Audit** seluruh codebase → 13 temuan. Dikerjakan semua isu kritis + medium.
 - **[HIGH] Heuristik diperluas** — tambah huruf F + komentar peta lengkap 26 huruf (mana yang perlu ML).
